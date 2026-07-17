@@ -1,6 +1,6 @@
 ---
 name: atlassian-search
-description: Search and retrieve information from Jira and Confluence using the atlassian-cli tool. Use this skill to find issues, search documentation, manage projects, and track sprints in Atlassian products.
+description: Search and retrieve information from Jira and Confluence using the atlassian-cli command-line tool. Use this skill whenever the user wants to find, look up, or check Jira issues, tickets, bugs, sprints, boards, or projects, or wants to search, read, or pull content from Confluence pages, spaces, or documentation — even if they don't name Jira, Confluence, or atlassian-cli explicitly. Also trigger for requests like "what's assigned to me", "find the ticket about X", "check sprint status", or "look up the doc on Y" in an Atlassian context.
 ---
 
 # Atlassian Search Skill
@@ -9,20 +9,45 @@ This skill enables you to search and retrieve information from Jira and Confluen
 
 ## Prerequisites
 
-Before using this skill, ensure:
-1. Environment variables are set:
-   - `ATLASSIAN_URL`: Jira instance URL (e.g., `https://your-domain.atlassian.net`)
-   - `ATLASSIAN_USERNAME`: Your email address
-   - `ATLASSIAN_API_TOKEN`: Your API token
-   - `ATLASSIAN_CLOUD`: Set to `true` for Cloud, `false` for Server/DC (default: true)
-   - `ATLASSIAN_JIRA_API_VERSION`: Optional Jira REST API version override (`2`, `3`, or `latest`)
-   - `CONFLUENCE_URL`: Optional separate Confluence host; falls back to `ATLASSIAN_URL`
-   - `CONFLUENCE_USERNAME`: Optional separate Confluence username; falls back to `ATLASSIAN_USERNAME`
-   - `CONFLUENCE_API_TOKEN`: Optional separate Confluence token; falls back to `ATLASSIAN_API_TOKEN`
-   - `CONFLUENCE_BASE_PATH`: Confluence API base path (default: `/wiki`)
-2. The `atlassian-cli` binary is built and available in PATH
+Before using this skill, ensure both the binary and credentials are available.
 
-For split Jira/Confluence deployments, prefer setting the Confluence-specific variables explicitly.
+### The `atlassian-cli` binary
+
+The tool must be built and available in PATH. It's a Zig project; from the repo root:
+
+```bash
+zig build                 # produces ./zig-out/bin/atlassian-cli
+zig build install         # optional, installs into your Zig prefix
+```
+
+The build requires Zig `0.15.2` or newer (see `build.zig.zon`) and has no external dependencies. After building, put `zig-out/bin/atlassian-cli` on your PATH (or run it by full path).
+
+### Credentials
+
+**Load credentials from the environment. This is the required approach for the API token and any other secret.** The CLI reads these variables directly, so they should already be present in the shell where commands run — exported from your shell environment (or injected by your secrets manager / CI) so they're available in every shell, interactive and non-interactive.
+
+Configuration values:
+- `ATLASSIAN_URL`: Jira instance URL (e.g., `https://your-domain.atlassian.net`)
+- `ATLASSIAN_USERNAME`: Your email address (or username on Server/DC)
+- `ATLASSIAN_API_TOKEN`: Your API token (or password / personal access token on Server/DC) — **secret**
+- `ATLASSIAN_CLOUD`: Set to `true` for Cloud, `false` for Server/DC (default: true)
+- `ATLASSIAN_JIRA_API_VERSION`: Optional Jira REST API version override (`2`, `3`, or `latest`)
+- `CONFLUENCE_URL`: Optional separate Confluence host; falls back to `ATLASSIAN_URL`
+- `CONFLUENCE_USERNAME`: Optional separate Confluence username; falls back to `ATLASSIAN_USERNAME`
+- `CONFLUENCE_API_TOKEN`: Optional separate Confluence token; falls back to `ATLASSIAN_API_TOKEN` — **secret**
+- `CONFLUENCE_BASE_PATH`: Confluence API base path (default: `/wiki`)
+
+For split Jira/Confluence deployments, set the Confluence-specific variables explicitly.
+
+### Handling secrets safely
+
+These rules matter because this skill is typically run by an AI agent:
+
+- **Never read, print, echo, or repeat the token.** Do not run commands like `echo $ATLASSIAN_API_TOKEN`, `env`, or `cat` on any credential file. The CLI consumes the token from the environment on its own — you never need to see its value to use it.
+- **Do not ask the user to paste the token into the conversation,** and do not place it in generated files, logs, or command arguments.
+- **Prefer the environment over on-disk storage.** The CLI can also read from a config file at `~/.config/atlassian-cli/config.json`, but that file stores values in plaintext — treat it as a legacy convenience, not a place to put secrets. Keep the token in the environment (or a proper secrets manager) instead. See "Config Commands" for the mechanics if you must inspect it.
+
+If a credential is missing, the CLI fails with a clear `ConfigurationMissing` error — tell the user which variable to set rather than trying to discover or store the value yourself.
 
 ## Available Commands
 
@@ -263,6 +288,24 @@ Get labels/tags on a specific page:
 atlassian-cli confluence labels <page-id> [--format=text|json]
 ```
 
+### Config Commands
+
+The CLI has a `config` service that reads and writes `~/.config/atlassian-cli/config.json` (values resolve as: environment variable first, then this file). It supports only the three core keys: `atlassian_url`, `atlassian_username`, `atlassian_api_token`.
+
+```bash
+atlassian-cli config set <key> <value>   # write a value
+atlassian-cli config get <key>           # read a value back
+```
+
+**Prefer environment variables for credentials — especially the token.** This file is plaintext, so storing the API token here is discouraged. It's reasonable for the non-secret `atlassian_url` and `atlassian_username` if that's convenient, e.g.:
+
+```bash
+atlassian-cli config set atlassian_url https://your-domain.atlassian.net
+atlassian-cli config set atlassian_username you@example.com
+```
+
+As an agent, don't write the token via `config set` and don't `config get` a secret to display it.
+
 ## Output Formats
 
 ### Text Format (Default)
@@ -450,6 +493,8 @@ To use this skill, you need an Atlassian API token:
 2. Click "Create API token"
 3. Give it a descriptive name (e.g., "Claude CLI")
 4. Copy the token immediately (you won't see it again)
-5. Set environment variable: `export ATLASSIAN_API_TOKEN=<your-token>`
+5. Provide it through the environment as `ATLASSIAN_API_TOKEN` — set it in your shell environment or a secrets manager so it's available to the shell where the CLI runs. Keep it out of plaintext config files, source control, and command arguments.
+
+For Server/DC, `ATLASSIAN_API_TOKEN` holds your account password (or a personal access token) rather than a Cloud API token.
 
 **Security Note:** Keep your API token secure. Do not commit it to version control or share it publicly.

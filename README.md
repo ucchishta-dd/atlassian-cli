@@ -34,30 +34,11 @@ The binary will be available at `./zig-out/bin/atlassian-cli`
 
 ## Configuration
 
-You can configure the CLI using the built-in configuration command (recommended) or environment variables.
+The CLI reads each value from an environment variable first, then falls back to a config file at `~/.config/atlassian-cli/config.json`.
 
-### Using Config Command
+**Provide secrets through the environment, not the config file.** The API token (and Confluence token) should come from an exported environment variable or a secrets manager. The config file stores values in plaintext on disk, so it is not an appropriate place for credentials — use it, if at all, only for the non-secret `atlassian_url` and `atlassian_username`.
 
-Run the following commands to set your credentials persistently:
-
-```bash
-# Set Atlassian URL
-atlassian-cli config set atlassian_url https://your-domain.atlassian.net
-
-# Set Username (Email)
-atlassian-cli config set atlassian_username your-email@example.com
-
-# Set API Token
-atlassian-cli config set atlassian_api_token your-api-token
-```
-
-To view current configuration:
-
-```bash
-atlassian-cli config get atlassian_url
-```
-
-### Environment Variables
+### Environment Variables (recommended)
 
 Environment variables take precedence over the configuration file. Set the following:
 
@@ -75,14 +56,30 @@ export CONFLUENCE_API_TOKEN="your-confluence-token"  # optional separate Conflue
 export CONFLUENCE_BASE_PATH="/wiki"
 ```
 
+### Config File (optional, non-secrets only)
+
+The `config` command persists values to `~/.config/atlassian-cli/config.json`. Because that file is plaintext, use it only for non-secret values such as the URL and username — keep the token in the environment.
+
+```bash
+atlassian-cli config set atlassian_url https://your-domain.atlassian.net
+atlassian-cli config set atlassian_username your-email@example.com
+
+# Read a value back
+atlassian-cli config get atlassian_url
+```
+
+Only the three core keys are supported: `atlassian_url`, `atlassian_username`, `atlassian_api_token`. An exported environment variable always overrides the stored value.
+
 ### Creating an API Token
 
 1. Go to https://id.atlassian.com/manage-profile/security/api-tokens
 2. Click "Create API token"
 3. Give it a name and copy the token
-4. Use this token as `ATLASSIAN_API_TOKEN`
+4. Provide this token as the `ATLASSIAN_API_TOKEN` environment variable (or via your secrets manager). Keep it out of the config file, source control, and shell history where practical. For Jira/Confluence Server/DC, this value is your account password or a personal access token rather than a Cloud API token.
 
 ### Using direnv (recommended)
+
+This keeps credentials in your environment rather than a plaintext config file. `.envrc` is already listed in `.gitignore`, so your secrets stay out of version control — never commit it.
 
 Create a `.envrc` file in the project directory:
 
