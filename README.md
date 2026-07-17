@@ -328,18 +328,20 @@ async function getConfluencePage(pageId: string) {
 
 ## Output Format
 
-All commands output JSON, making it easy to parse and process the results:
+Commands print human-readable **text by default**. Pass `--format=json` to get the raw API response, which is easy to parse and process:
 
 ```bash
-# Pretty print with jq
-atlassian-cli jira issue PROJECT-123 | jq
+# Pretty print with jq (note --format=json)
+atlassian-cli jira issue PROJECT-123 --format=json | jq
 
 # Extract specific fields
-atlassian-cli jira search "project=DEV" | jq '.issues[].key'
+atlassian-cli jira search "project=DEV" --format=json | jq '.issues[].key'
 
 # Count results
-atlassian-cli confluence spaces | jq '.results | length'
+atlassian-cli confluence spaces --format=json | jq '.results | length'
 ```
+
+Confluence search commands also accept `--full-content` to include full page bodies in the text output instead of previews.
 
 ## Development
 
