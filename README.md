@@ -119,6 +119,9 @@ atlassian-cli <service> <command> [options]
 #### Get Issue
 ```bash
 atlassian-cli jira issue PROJECT-123
+
+# Request linked issues, parent, components, and comments
+atlassian-cli jira issue PROJECT-123 --fields=summary,issuelinks,parent,components,comment --format=json
 ```
 
 #### Search Issues
@@ -131,6 +134,9 @@ atlassian-cli jira search "assignee=currentUser()" --max=50
 
 # Recent issues
 atlassian-cli jira search "created >= -7d ORDER BY created DESC" --max=20
+
+# Request every available system and custom field
+atlassian-cli jira search "project=DEV" "--fields=*all" --format=json
 ```
 
 #### List Projects
@@ -340,6 +346,10 @@ atlassian-cli jira search "project=DEV" --format=json | jq '.issues[].key'
 # Count results
 atlassian-cli confluence spaces --format=json | jq '.results | length'
 ```
+
+Jira issue and search commands request a compact field set by default. Use `--fields=<comma-separated-fields>`
+to retrieve fields such as `issuelinks`, `parent`, `components`, or `comment`. Custom fields use their Jira
+IDs, such as `customfield_12345`; use quoted `"--fields=*all"` to request every available field.
 
 Confluence search commands also accept `--full-content` to include full page bodies in the text output instead of previews.
 

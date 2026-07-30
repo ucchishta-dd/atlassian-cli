@@ -26,6 +26,13 @@ const JiraCommand = enum {
     help,
 };
 
+fn printStdout(comptime format: []const u8, args: anytype) !void {
+    var buffer: [4096]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&buffer);
+    try stdout_writer.interface.print(format, args);
+    try stdout_writer.interface.flush();
+}
+
 const ConfluenceCommand = enum {
     page,
     search,
@@ -63,6 +70,7 @@ fn printHelp() !void {
         \\Common Options:
         \\  --format=text            Output format: text (default) or json
         \\  --format=json            Raw JSON output
+        \\  --fields=<fields>         Jira fields to request (comma-separated or *all)
         \\  --full-content           Show full content (default shows preview only)
         \\
         \\Jira Commands:
@@ -97,16 +105,16 @@ fn printHelp() !void {
         \\  atlassian-cli confluence spaces --format=json
         \\
     ;
-    std.debug.print("{s}\n", .{help});
+    try printStdout("{s}\n", .{help});
 }
 
 fn printJiraHelp() !void {
     const help =
         \\Jira Commands:
-        \\  issue <key>                        Get issue details
-        \\  search <jql> [--max=20]           Search issues using JQL
+        \\  issue <key> [--fields=<fields>]   Get issue details
+        \\  search <jql> [--max=20] [--fields=<fields>] Search issues using JQL
         \\  projects                           List all projects
-        \\  project-issues <key> [--max=20]   Get issues in project
+        \\  project-issues <key> [--max=20] [--fields=<fields>] Get issues in project
         \\  boards [--type=scrum]             List agile boards
         \\  sprints <board-id> [--state=active] List sprints
         \\  sprint-issues <sprint-id> [--max=50] Get issues in sprint
@@ -118,7 +126,7 @@ fn printJiraHelp() !void {
         \\  "created >= -7d"
         \\
     ;
-    std.debug.print("{s}\n", .{help});
+    try printStdout("{s}\n", .{help});
 }
 
 /// Parse output format from args
@@ -134,6 +142,45 @@ fn parseOutputFormat(args: []const [:0]const u8) OutputFormat {
         }
     }
     return .text; // default
+}
+
+fn parseOption(args: []const [:0]const u8, prefix: []const u8) ?[]const u8 {
+    for (args) |arg| {
+        if (std.mem.startsWith(u8, arg, prefix)) {
+            return arg[prefix.len..];
+        }
+    }
+    return null;
+}
+
+fn parseFields(args: []const [:0]const u8) ?[]const u8 {
+    return parseOption(args, "--fields=");
+}
+
+fn parseResultLimit(args: []const [:0]const u8, prefix: []const u8, default: usize) usize {
+    const value = parseOption(args, prefix) orelse return default;
+    return std.fmt.parseInt(usize, value, 10) catch default;
+}
+
+test "parse Jira fields and result limit in any option order" {
+    const args = [_][:0]const u8{
+        "search",
+        "project=DEV",
+        "--format=json",
+        "--fields=summary,issuelinks,parent",
+        "--max=50",
+    };
+
+    try std.testing.expectEqualStrings("summary,issuelinks,parent", parseFields(&args).?);
+    try std.testing.expectEqual(@as(usize, 50), parseResultLimit(&args, "--max=", 20));
+}
+
+test "result limit falls back for missing or invalid values" {
+    const missing = [_][:0]const u8{ "search", "project=DEV" };
+    const invalid = [_][:0]const u8{ "search", "project=DEV", "--max=many" };
+
+    try std.testing.expectEqual(@as(usize, 20), parseResultLimit(&missing, "--max=", 20));
+    try std.testing.expectEqual(@as(usize, 20), parseResultLimit(&invalid, "--max=", 20));
 }
 
 /// Check if --full-content flag is present
@@ -168,7 +215,7 @@ fn printConfluenceHelp() !void {
         \\  "created >= \"2024-01-01\""
         \\
     ;
-    std.debug.print("{s}\n", .{help});
+    try printStdout("{s}\n", .{help});
 }
 
 fn handleJiraCommand(allocator: std.mem.Allocator, client: *AtlassianClient, args: []const [:0]const u8) !void {
@@ -190,38 +237,35 @@ fn handleJiraCommand(allocator: std.mem.Allocator, client: *AtlassianClient, arg
         .help => try printJiraHelp(),
         .issue => {
             if (args.len < 2) {
-                std.debug.print("Usage: jira issue <issue-key> [--format=text|json]\n", .{});
+                std.debug.print("Usage: jira issue <issue-key> [--fields=<fields>] [--format=text|json]\n", .{});
                 return;
             }
-            const response = try jira.getIssue(args[1], null);
+            const response = try jira.getIssue(args[1], parseFields(args));
             defer allocator.free(response);
 
             if (output_format == .text) {
                 const formatted = try formatter.formatJiraIssue(allocator, response);
                 defer allocator.free(formatted);
-                std.debug.print("{s}", .{formatted});
+                try printStdout("{s}", .{formatted});
             } else {
-                std.debug.print("{s}\n", .{response});
+                try printStdout("{s}\n", .{response});
             }
         },
         .search => {
             if (args.len < 2) {
-                std.debug.print("Usage: jira search <jql> [--max=20] [--format=text|json]\n", .{});
+                std.debug.print("Usage: jira search <jql> [--max=20] [--fields=<fields>] [--format=text|json]\n", .{});
                 return;
             }
-            var max_results: usize = 20;
-            if (args.len > 2 and std.mem.startsWith(u8, args[2], "--max=")) {
-                max_results = std.fmt.parseInt(usize, args[2][6..], 10) catch 20;
-            }
-            const response = try jira.search(args[1], null, max_results);
+            const max_results = parseResultLimit(args, "--max=", 20);
+            const response = try jira.search(args[1], parseFields(args), max_results);
             defer allocator.free(response);
 
             if (output_format == .text) {
                 const formatted = try formatter.formatJiraSearchResults(allocator, response);
                 defer allocator.free(formatted);
-                std.debug.print("{s}", .{formatted});
+                try printStdout("{s}", .{formatted});
             } else {
-                std.debug.print("{s}\n", .{response});
+                try printStdout("{s}\n", .{response});
             }
         },
         .projects => {
@@ -231,29 +275,26 @@ fn handleJiraCommand(allocator: std.mem.Allocator, client: *AtlassianClient, arg
             if (output_format == .text) {
                 const formatted = try formatter.formatGenericList(allocator, response, "project");
                 defer allocator.free(formatted);
-                std.debug.print("{s}", .{formatted});
+                try printStdout("{s}", .{formatted});
             } else {
-                std.debug.print("{s}\n", .{response});
+                try printStdout("{s}\n", .{response});
             }
         },
         .@"project-issues" => {
             if (args.len < 2) {
-                std.debug.print("Usage: jira project-issues <project-key> [--max=20] [--format=text|json]\n", .{});
+                std.debug.print("Usage: jira project-issues <project-key> [--max=20] [--fields=<fields>] [--format=text|json]\n", .{});
                 return;
             }
-            var max_results: usize = 20;
-            if (args.len > 2 and std.mem.startsWith(u8, args[2], "--max=")) {
-                max_results = std.fmt.parseInt(usize, args[2][6..], 10) catch 20;
-            }
-            const response = try jira.getProjectIssues(args[1], max_results);
+            const max_results = parseResultLimit(args, "--max=", 20);
+            const response = try jira.getProjectIssues(args[1], parseFields(args), max_results);
             defer allocator.free(response);
 
             if (output_format == .text) {
                 const formatted = try formatter.formatJiraSearchResults(allocator, response);
                 defer allocator.free(formatted);
-                std.debug.print("{s}", .{formatted});
+                try printStdout("{s}", .{formatted});
             } else {
-                std.debug.print("{s}\n", .{response});
+                try printStdout("{s}\n", .{response});
             }
         },
         .boards => {
@@ -268,7 +309,7 @@ fn handleJiraCommand(allocator: std.mem.Allocator, client: *AtlassianClient, arg
             }
             const response = try jira.getBoards(board_type, max_results);
             defer allocator.free(response);
-            std.debug.print("{s}\n", .{response});
+            try printStdout("{s}\n", .{response});
         },
         .sprints => {
             if (args.len < 2) {
@@ -281,7 +322,7 @@ fn handleJiraCommand(allocator: std.mem.Allocator, client: *AtlassianClient, arg
             }
             const response = try jira.getSprints(args[1], state);
             defer allocator.free(response);
-            std.debug.print("{s}\n", .{response});
+            try printStdout("{s}\n", .{response});
         },
         .@"sprint-issues" => {
             if (args.len < 2) {
@@ -294,12 +335,12 @@ fn handleJiraCommand(allocator: std.mem.Allocator, client: *AtlassianClient, arg
             }
             const response = try jira.getSprintIssues(args[1], max_results);
             defer allocator.free(response);
-            std.debug.print("{s}\n", .{response});
+            try printStdout("{s}\n", .{response});
         },
         .user => {
             const response = try jira.getCurrentUser();
             defer allocator.free(response);
-            std.debug.print("{s}\n", .{response});
+            try printStdout("{s}\n", .{response});
         },
     }
 }
@@ -340,9 +381,9 @@ fn handleConfluenceCommand(allocator: std.mem.Allocator, client: *AtlassianClien
                 // Pass base URL to formatter to dynamically generate page URL
                 const formatted = try formatter.formatConfluencePage(allocator, response, base_url, confluence_base_path);
                 defer allocator.free(formatted);
-                std.debug.print("{s}", .{formatted});
+                try printStdout("{s}", .{formatted});
             } else {
-                std.debug.print("{s}\n", .{response});
+                try printStdout("{s}\n", .{response});
             }
         },
         .search => {
@@ -360,9 +401,9 @@ fn handleConfluenceCommand(allocator: std.mem.Allocator, client: *AtlassianClien
             if (output_format == .text) {
                 const formatted = try formatter.formatConfluenceSearchResults(allocator, response, base_url, confluence_base_path, show_full_content);
                 defer allocator.free(formatted);
-                std.debug.print("{s}", .{formatted});
+                try printStdout("{s}", .{formatted});
             } else {
-                std.debug.print("{s}\n", .{response});
+                try printStdout("{s}\n", .{response});
             }
         },
         .@"text-search" => {
@@ -380,9 +421,9 @@ fn handleConfluenceCommand(allocator: std.mem.Allocator, client: *AtlassianClien
             if (output_format == .text) {
                 const formatted = try formatter.formatConfluenceSearchResults(allocator, response, base_url, confluence_base_path, show_full_content);
                 defer allocator.free(formatted);
-                std.debug.print("{s}", .{formatted});
+                try printStdout("{s}", .{formatted});
             } else {
-                std.debug.print("{s}\n", .{response});
+                try printStdout("{s}\n", .{response});
             }
         },
         .spaces => {
@@ -396,9 +437,9 @@ fn handleConfluenceCommand(allocator: std.mem.Allocator, client: *AtlassianClien
             if (output_format == .text) {
                 const formatted = try formatter.formatGenericList(allocator, response, "space");
                 defer allocator.free(formatted);
-                std.debug.print("{s}", .{formatted});
+                try printStdout("{s}", .{formatted});
             } else {
-                std.debug.print("{s}\n", .{response});
+                try printStdout("{s}\n", .{response});
             }
         },
         .space => {
@@ -412,9 +453,9 @@ fn handleConfluenceCommand(allocator: std.mem.Allocator, client: *AtlassianClien
             if (output_format == .text) {
                 const formatted = try formatter.formatGenericList(allocator, response, "space");
                 defer allocator.free(formatted);
-                std.debug.print("{s}", .{formatted});
+                try printStdout("{s}", .{formatted});
             } else {
-                std.debug.print("{s}\n", .{response});
+                try printStdout("{s}\n", .{response});
             }
         },
         .children => {
@@ -432,9 +473,9 @@ fn handleConfluenceCommand(allocator: std.mem.Allocator, client: *AtlassianClien
             if (output_format == .text) {
                 const formatted = try formatter.formatConfluenceSearchResults(allocator, response, base_url, confluence_base_path, show_full_content);
                 defer allocator.free(formatted);
-                std.debug.print("{s}", .{formatted});
+                try printStdout("{s}", .{formatted});
             } else {
-                std.debug.print("{s}\n", .{response});
+                try printStdout("{s}\n", .{response});
             }
         },
         .comments => {
@@ -448,9 +489,9 @@ fn handleConfluenceCommand(allocator: std.mem.Allocator, client: *AtlassianClien
             if (output_format == .text) {
                 const formatted = try formatter.formatGenericList(allocator, response, "comment");
                 defer allocator.free(formatted);
-                std.debug.print("{s}", .{formatted});
+                try printStdout("{s}", .{formatted});
             } else {
-                std.debug.print("{s}\n", .{response});
+                try printStdout("{s}\n", .{response});
             }
         },
         .labels => {
@@ -464,9 +505,9 @@ fn handleConfluenceCommand(allocator: std.mem.Allocator, client: *AtlassianClien
             if (output_format == .text) {
                 const formatted = try formatter.formatGenericList(allocator, response, "label");
                 defer allocator.free(formatted);
-                std.debug.print("{s}", .{formatted});
+                try printStdout("{s}", .{formatted});
             } else {
-                std.debug.print("{s}\n", .{response});
+                try printStdout("{s}\n", .{response});
             }
         },
     }
@@ -525,16 +566,16 @@ pub fn main() !void {
             }
             try config.set(args[3], args[4]);
             try config.save();
-            std.debug.print("✅ Updated {s}\n", .{args[3]});
+            try printStdout("✅ Updated {s}\n", .{args[3]});
         } else if (std.mem.eql(u8, subcommand, "get")) {
             if (args.len < 4) {
                 std.debug.print("Usage: {s} config get <key>\n", .{args[0]});
                 return;
             }
             if (config.get(args[3])) |val| {
-                std.debug.print("{s}\n", .{val});
+                try printStdout("{s}\n", .{val});
             } else {
-                std.debug.print("(null)\n", .{});
+                try printStdout("(null)\n", .{});
             }
         } else {
             std.debug.print("Unknown config subcommand: {s}\n", .{subcommand});

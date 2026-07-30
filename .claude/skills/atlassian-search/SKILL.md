@@ -11,10 +11,6 @@ This skill enables you to search and retrieve information from Jira and Confluen
 
 Before using this skill, ensure both the binary and credentials are available.
 
-> **Running as an agent?** Each shell invocation starts fresh, so credentials exported by an
-> interactive shell profile are **not** inherited. Prefix every `atlassian-cli` command with the
-> guarded source line from [Loading credentials in a non-interactive shell](#loading-credentials-in-a-non-interactive-shell).
-
 ### The `atlassian-cli` binary
 
 The tool must be built and available in PATH. It's a Zig project; from the repo root:
@@ -28,7 +24,7 @@ The build requires Zig `0.15.2` or newer (see `build.zig.zon`) and has no extern
 
 ### Credentials
 
-**Load credentials from the environment. This is the required approach for the API token and any other secret.** The CLI reads these variables directly, so they must be present in the shell where the command actually runs — which is not necessarily the shell you configured. Interactive-profile exports do not reach non-interactive shells; see [Loading credentials in a non-interactive shell](#loading-credentials-in-a-non-interactive-shell) for the pattern that works in both.
+**Load credentials from the environment. This is the required approach for the API token and any other secret.** The CLI reads these variables directly, so they must be present in the shell where the command runs.
 
 Configuration values:
 - `ATLASSIAN_URL`: Jira instance URL (e.g., `https://your-domain.atlassian.net`)
@@ -43,92 +39,23 @@ Configuration values:
 
 For split Jira/Confluence deployments, set the Confluence-specific variables explicitly.
 
-### Loading credentials in a non-interactive shell
+### Loading credentials for agent commands
 
-Exporting these variables from an interactive shell profile (`.zshrc`, `.bash_profile`) is enough for
-your own terminal, but **not** for automation. Agent tool calls, `zsh -c`, cron, and CI all run
-non-interactive shells that never read `.zshrc`, so the variables are simply absent and the CLI exits
-with `ConfigurationMissing`. Each invocation is also a fresh process — exporting in one command does
-not carry over to the next.
-
-The fix is to source a credential file in the **same** invocation as the command:
+Before running `atlassian-cli`, source the credential file in the same shell invocation:
 
 ```bash
-[ -f "$HOME/.env/atlassian-cli.zsh" ] && . "$HOME/.env/atlassian-cli.zsh"
-atlassian-cli jira user
+source "$HOME/.env/atlassian-cli.zsh" &&
+atlassian-cli jira issue PROJECT-123
 ```
 
-Or as a one-liner, which is the form to use for every command in this skill:
-
-```bash
-[ -f "$HOME/.env/atlassian-cli.zsh" ] && . "$HOME/.env/atlassian-cli.zsh"; atlassian-cli jira search "assignee=currentUser() AND status!=Done"
-```
-
-Notes on this pattern:
-
-- `$HOME/.env/atlassian-cli.zsh` is the **default convention** for this skill: a file containing only
-  `export KEY=value` lines for the variables listed above. Despite the `.zsh` extension it is plain
-  POSIX shell, so `.` (rather than `source`) works under both bash and zsh.
-- The `[ -f ... ] &&` guard makes this a **no-op when the file doesn't exist**, so the line is safe to
-  paste unconditionally. If credentials already come from the real environment (a secrets manager,
-  CI variables, a container's env), nothing is overwritten in a way that breaks anything — and if
-  neither source is present, the CLI still fails with its usual clear error.
-- Keep the file permissions tight: `chmod 600 ~/.env/atlassian-cli.zsh`.
-- **Exit-code caveat:** when the file is absent the guard evaluates to false and returns exit `1`. That
-  is harmless in the `guard; atlassian-cli …` form above, because the final exit code is the CLI's. But
-  if the guard is the last line of a script, or runs under `set -e`, append `|| true` so a missing file
-  doesn't fail the script:
-  ```bash
-  [ -f "$HOME/.env/atlassian-cli.zsh" ] && . "$HOME/.env/atlassian-cli.zsh" || true
-  ```
-- Sourcing loads the token into the shell's environment for the CLI to consume. That is not a licence
-  to inspect it — the rules in the next section still apply.
-
-If your credential file lives elsewhere, substitute the path — but source it the same way, in the same
-invocation, guarded.
-
-#### Why not just source it once?
-
-Because there is no "session" to source into. Every command runs in its own shell process, and
-environment variables die with that process — sourcing in one invocation does not affect the next.
-Sourcing per invocation is not redundant, it is the only thing that works at the command level.
-
-If the repetition bothers you, move the source line **up** into a shell startup file that fires for
-non-interactive shells, rather than trying to make one command's environment persist:
-
-| Startup file | Read by non-interactive shells? | Notes |
-| --- | --- | --- |
-| `~/.zshrc` | **No** | The usual mistake. Interactive-only, so tool calls and `zsh -c` skip it. |
-| `~/.zshenv` | **Yes** | zsh reads it for *every* invocation. Effective once-and-done hook. |
-| `~/.bash_profile` | No | Login shells only. |
-| `BASH_ENV=<file>` | Yes (bash) | bash's equivalent of `.zshenv`, for non-interactive bash. |
-
-So `~/.zshenv` will genuinely eliminate the per-command prefix:
-
-```bash
-# in ~/.zshenv, NOT ~/.zshrc
-[[ -z "$ATLASSIAN_API_TOKEN" && -f "$HOME/.env/atlassian-cli.zsh" ]] && source "$HOME/.env/atlassian-cli.zsh"
-```
-
-**Understand the trade-off before doing this.** `.zshenv` exports the token into the environment of
-*every* zsh process you ever start — unrelated scripts, build tools, and any subprocess they spawn —
-where it is visible to anything that reads a child's environment. The per-invocation form keeps the
-token scoped to the shells that actually call `atlassian-cli`. Prefer per-invocation for shared or
-untrusted machines; `.zshenv` is a personal-convenience choice, not a recommendation.
-
-Do **not** solve this by putting the token in a Claude Code `settings.json` `env` block or any other
-in-repo config: those are plaintext and easy to commit by accident.
-
-The two approaches compose safely. If credentials are already loaded via `.zshenv`, the guarded source
-line is idempotent and simply re-exports the same values, so **keep using the prefixed form in this
-skill** — it is what makes the commands portable to machines that have no `.zshenv` hook.
+Do not read, print, or otherwise expose the credential file or its values. If the file cannot be
+sourced, report the missing credentials instead of attempting to discover them.
 
 ### Handling secrets safely
 
 These rules matter because this skill is typically run by an AI agent:
 
 - **Never read, print, echo, or repeat the token.** Do not run commands like `echo $ATLASSIAN_API_TOKEN`, `env`, or `cat` on any credential file. The CLI consumes the token from the environment on its own — you never need to see its value to use it.
-- **Sourcing is not reading.** `. "$HOME/.env/atlassian-cli.zsh"` loads the variables into the shell without ever surfacing them in output, which is exactly why it's the supported pattern. `cat`, `echo`, `grep`, and `env` on that same file or those variables are still off limits. To check whether a variable is set, test for presence and never print the value: `[ -n "$ATLASSIAN_API_TOKEN" ] && echo set`.
 - **Do not ask the user to paste the token into the conversation,** and do not place it in generated files, logs, or command arguments.
 - **Prefer the environment over on-disk storage.** The CLI can also read from a config file at `~/.config/atlassian-cli/config.json`, but that file stores values in plaintext — treat it as a legacy convenience, not a place to put secrets. Keep the token in the environment (or a proper secrets manager) instead. See "Config Commands" for the mechanics if you must inspect it.
 
@@ -143,7 +70,7 @@ If a credential is missing, the CLI fails with a clear `ConfigurationMissing` er
 Get detailed information about a specific Jira issue:
 
 ```bash
-atlassian-cli jira issue <issue-key>
+atlassian-cli jira issue <issue-key> [--fields=<fields>]
 ```
 
 **Examples:**
@@ -153,6 +80,9 @@ atlassian-cli jira issue PROJECT-123
 
 # Get raw JSON output
 atlassian-cli jira issue PROJECT-123 --format=json
+
+# Get links, parent, components, and comments
+atlassian-cli jira issue PROJECT-123 --fields=summary,issuelinks,parent,components,comment --format=json
 ```
 
 #### 2. Search Issues with JQL
@@ -160,7 +90,7 @@ atlassian-cli jira issue PROJECT-123 --format=json
 Search for Jira issues using JQL (Jira Query Language):
 
 ```bash
-atlassian-cli jira search "<jql>" [--max=20] [--format=text|json]
+atlassian-cli jira search "<jql>" [--max=20] [--fields=<fields>] [--format=text|json]
 ```
 
 **Examples:**
@@ -435,7 +365,9 @@ Raw API response for programmatic processing:
 atlassian-cli jira issue PROJECT-123 --format=json
 ```
 
-Returns complete JSON with all fields from the API.
+Jira issue and search commands request a compact field set by default. Use `--fields=<comma-separated-fields>`
+for fields such as `issuelinks`, `parent`, `components`, or `comment`. Custom fields use their Jira IDs,
+such as `customfield_12345`; use quoted `"--fields=*all"` to request every available field.
 
 ## Usage Guidelines
 
@@ -507,16 +439,9 @@ atlassian-cli jira search "updated >= -3d AND project=MYPROJECT" --max=30
 ### Common Errors and Solutions
 
 1. **"<VAR> environment variable not set and no config found" / `error: ConfigurationMissing`**
-   - **Most common cause in automation: the credential file was never sourced.** The variables exist in
-     your interactive shell but not in the non-interactive one running the command. Retry with the
-     guarded source line in the same invocation:
-     ```bash
-     [ -f "$HOME/.env/atlassian-cli.zsh" ] && . "$HOME/.env/atlassian-cli.zsh"; atlassian-cli jira user
-     ```
-     See [Loading credentials in a non-interactive shell](#loading-credentials-in-a-non-interactive-shell).
-   - If there is no credential file, set the variable directly:
-     `export ATLASSIAN_URL=https://your-domain.atlassian.net`
-   - Do not respond to this error by hunting for the token's value or writing it to a config file.
+   - Source `$HOME/.env/atlassian-cli.zsh` in the same shell invocation as the CLI command, as shown in
+     [Loading credentials for agent commands](#loading-credentials-for-agent-commands).
+   - If the file cannot be sourced, report the missing credentials. Do not attempt to discover or store them.
 
 2. **"Authentication failed"**
    - Verify your API token is valid
@@ -555,7 +480,7 @@ atlassian-cli jira search "updated >= -3d AND project=MYPROJECT" --max=30
 
 ### Jira
 
-1. **Use Specific JQL**: `status=Open` is better than searching all statuses
+1. **Bound JQL Early**: Start with project plus date, status, or issue type before widening to broad product terms
 2. **Order Results**: Add `ORDER BY created DESC` to see newest first
 3. **Limit Scope**: Filter by project or sprint to reduce noise
 4. **Use Labels**: Search by labels for categorized issues
@@ -588,15 +513,6 @@ To use this skill, you need an Atlassian API token:
 3. Give it a descriptive name (e.g., "Claude CLI")
 4. Copy the token immediately (you won't see it again)
 5. Provide it through the environment as `ATLASSIAN_API_TOKEN` — set it in your shell environment or a secrets manager so it's available to the shell where the CLI runs. Keep it out of plaintext config files, source control, and command arguments.
-
-The convention this skill assumes is a `chmod 600` file at `$HOME/.env/atlassian-cli.zsh` holding the
-`export` lines, sourced per invocation as described in
-[Loading credentials in a non-interactive shell](#loading-credentials-in-a-non-interactive-shell).
-Add it to your interactive profile too if you want the variables available when you run the CLI by hand:
-
-```bash
-[[ -z "$ATLASSIAN_API_TOKEN" && -f "$HOME/.env/atlassian-cli.zsh" ]] && source "$HOME/.env/atlassian-cli.zsh"
-```
 
 For Server/DC, `ATLASSIAN_API_TOKEN` holds your account password (or a personal access token) rather than a Cloud API token.
 

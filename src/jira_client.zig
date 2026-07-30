@@ -30,8 +30,11 @@ pub const JiraClient = struct {
 
     /// Get issue by key (e.g., "PROJECT-123")
     pub fn getIssue(self: *JiraClient, issue_key: []const u8, fields: ?[]const u8) ![]u8 {
+        const encoded_fields = if (fields) |value| try urlEncode(self.allocator, value) else null;
+        defer if (encoded_fields) |value| self.allocator.free(value);
+
         var params_buffer: [1024]u8 = undefined;
-        const params = if (fields) |f|
+        const params = if (encoded_fields) |f|
             try std.fmt.bufPrint(&params_buffer, "fields={s}", .{f})
         else
             "fields=summary,description,status,assignee,reporter,labels,priority,created,updated,issuetype";
@@ -47,6 +50,8 @@ pub const JiraClient = struct {
         // URL encode JQL query
         const encoded_jql = try urlEncode(self.allocator, jql);
         defer self.allocator.free(encoded_jql);
+        const encoded_fields = if (fields) |value| try urlEncode(self.allocator, value) else null;
+        defer if (encoded_fields) |value| self.allocator.free(value);
 
         var params_buffer: [4096]u8 = undefined;
         var stream = std.io.fixedBufferStream(&params_buffer);
@@ -54,7 +59,7 @@ pub const JiraClient = struct {
 
         try writer.print("jql={s}", .{encoded_jql});
 
-        if (fields) |f| {
+        if (encoded_fields) |f| {
             try writer.print("&fields={s}", .{f});
         } else {
             try writer.writeAll("&fields=summary,description,status,assignee,reporter,labels,priority,created,updated,issuetype");
@@ -75,10 +80,10 @@ pub const JiraClient = struct {
     }
 
     /// Get project issues
-    pub fn getProjectIssues(self: *JiraClient, project_key: []const u8, max_results: usize) ![]u8 {
+    pub fn getProjectIssues(self: *JiraClient, project_key: []const u8, fields: ?[]const u8, max_results: usize) ![]u8 {
         var jql_buffer: [256]u8 = undefined;
         const jql = try std.fmt.bufPrint(&jql_buffer, "project={s} ORDER BY created DESC", .{project_key});
-        return try self.search(jql, null, max_results);
+        return try self.search(jql, fields, max_results);
     }
 
     /// Get issue transitions (workflow states)
