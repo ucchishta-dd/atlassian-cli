@@ -39,6 +39,36 @@ Configuration values:
 
 For split Jira/Confluence deployments, set the Confluence-specific variables explicitly.
 
+### Loading credentials from a shell file
+
+These variables are commonly kept in a shell file that is sourced on demand rather than exported globally. The conventional location for this project is:
+
+```
+~/.env/atlassian-cli.zsh
+```
+
+If that file exists, source it **in the same command that runs the CLI**:
+
+```bash
+source ~/.env/atlassian-cli.zsh && atlassian-cli jira issue PROJECT-123
+```
+
+**Sourcing and running must be a single invocation.** Every command an agent runs starts a fresh shell, so variables set by an earlier `source` are gone by the time the next command runs. Sourcing once "at the start" and then calling the CLI separately fails with `ConfigurationMissing` — each `atlassian-cli` call needs its own `source ... && ...` prefix.
+
+To stay portable across machines where the file is absent because the variables are already exported, guard the source so the CLI runs either way. Use the `if` form — `[ -f ... ] && source ...` leaves a non-zero exit status when the file is missing, which trips `set -e` and misreports success:
+
+```bash
+if [ -f ~/.env/atlassian-cli.zsh ]; then . ~/.env/atlassian-cli.zsh; fi; atlassian-cli jira projects
+```
+
+The file should hold plain `export KEY=value` lines — see `.envrc.example` for the full set — which `bash` sources correctly despite the `.zsh` extension. If it relies on zsh-only syntax, run the whole thing under zsh instead:
+
+```bash
+zsh -c 'source ~/.env/atlassian-cli.zsh && atlassian-cli jira search "assignee=currentUser()"'
+```
+
+Sourcing a credential file does not display its contents, so it is compatible with the secret-handling rules below. Do not combine it with anything that would print the environment.
+
 ### Handling secrets safely
 
 These rules matter because this skill is typically run by an AI agent:
@@ -47,9 +77,14 @@ These rules matter because this skill is typically run by an AI agent:
 - **Do not ask the user to paste the token into the conversation,** and do not place it in generated files, logs, or command arguments.
 - **Prefer the environment over on-disk storage.** The CLI can also read from a config file at `~/.config/atlassian-cli/config.json`, but that file stores values in plaintext — treat it as a legacy convenience, not a place to put secrets. Keep the token in the environment (or a proper secrets manager) instead. See "Config Commands" for the mechanics if you must inspect it.
 
-If a credential is missing, the CLI fails with a clear `ConfigurationMissing` error — tell the user which variable to set rather than trying to discover or store the value yourself.
+If a credential is missing, the CLI fails with a clear `ConfigurationMissing` error. Before reporting that to the user, check the likely cause in this order:
+
+1. The credential file was not sourced in the same invocation as the CLI call — the most common cause. Re-run with the `source ... && ...` prefix above.
+2. `~/.env/atlassian-cli.zsh` does not exist on this machine, so the variables were never defined anywhere. Tell the user which variable to set; do not try to discover or store the value yourself.
 
 ## Available Commands
+
+The examples below show bare `atlassian-cli ...` invocations for readability. When credentials come from `~/.env/atlassian-cli.zsh`, prefix each one with `source ~/.env/atlassian-cli.zsh && ` as described above.
 
 ### Jira Commands
 
@@ -421,8 +456,9 @@ atlassian-cli jira search "updated >= -3d AND project=MYPROJECT" --max=30
 
 ### Common Errors and Solutions
 
-1. **"ATLASSIAN_URL environment variable not set"**
-   - Set the environment variable: `export ATLASSIAN_URL=https://your-domain.atlassian.net`
+1. **"ATLASSIAN_URL environment variable not set"** (or any `ConfigurationMissing` error)
+   - First check the credential file was sourced in the *same* command: `source ~/.env/atlassian-cli.zsh && atlassian-cli ...`. A `source` from a previous command does not carry over.
+   - If the file does not exist, set the variable directly: `export ATLASSIAN_URL=https://your-domain.atlassian.net`
 
 2. **"Authentication failed"**
    - Verify your API token is valid
