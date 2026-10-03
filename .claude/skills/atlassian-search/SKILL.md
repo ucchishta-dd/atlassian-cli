@@ -494,16 +494,6 @@ atlassian-cli jira search "updated >= -3d AND project=MYPROJECT" --max=30
 4. **Check Page Hierarchy**: Use `children` command to explore page structure
 5. **Combine Searches**: Search by keyword, then browse space or check labels
 
-## Integration with Workflows
-
-This skill works well in combination with other tasks:
-
-- **Search Jira** → Analyze status → Summarize progress → Create report
-- **Find Confluence docs** → Extract information → Answer questions → Document findings
-- **Track sprint** → Identify blockers → Suggest actions → Update stakeholders
-- **Search issues** → Investigate patterns → Propose solutions → Generate recommendations
-- **Browse documentation** → Compile knowledge → Create summaries → Share insights
-
 ## API Token Setup
 
 To use this skill, you need an Atlassian API token:
