@@ -261,7 +261,7 @@ atlassian-cli confluence text-search "meeting notes" --full-content
 atlassian-cli confluence text-search "API documentation" --format=json
 ```
 
-**Note:** Use `--full-content` to display complete page content (up to 2000 chars per page). Without this flag, only 200-character previews are shown.
+**Note:** Use `--full-content` to display complete page content, with no length limit. Without this flag, only 200-character previews are shown.
 
 #### 4. List Spaces
 
